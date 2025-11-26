@@ -1,0 +1,4 @@
+alibabacloud_bssopenapi20171214
+alibabacloud_tea_openapi
+alibabacloud_tea_console
+python-dotenv
