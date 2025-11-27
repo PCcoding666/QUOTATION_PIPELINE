@@ -10,9 +10,9 @@ from dataclasses import asdict
 
 from data_ingestion import BaseDataLoader, QuotationRequest
 from semantic_parser import parse_requirement
-from sku_matcher import get_best_instance_sku, get_instance_family_name
 from pricing_service import PricingService
 from Tea.exceptions import TeaException
+from sku_recommend_service import SKURecommendService, get_instance_family_name
 
 
 class BatchQuotationProcessor:
@@ -25,17 +25,22 @@ class BatchQuotationProcessor:
     - 这样当需要支持新格式时，只需实现新的Loader，本类无需修改
     """
     
-    def __init__(self, pricing_service: PricingService, region: str = "cn-beijing"):
+    def __init__(
+        self, 
+        pricing_service: PricingService, 
+        sku_recommend_service: SKURecommendService,
+        region: str = "cn-beijing"
+    ):
         """
         初始化批处理器
         
-        Phase 5: Default region changed to cn-beijing
-        
         Args:
             pricing_service: 价格查询服务实例
+            sku_recommend_service: SKU推荐服务实例
             region: 阿里云区域 (默认: cn-beijing)
         """
         self.pricing_service = pricing_service
+        self.sku_recommend_service = sku_recommend_service
         self.region = region
         self.results: List[Dict[str, Any]] = []
     
@@ -93,31 +98,64 @@ class BatchQuotationProcessor:
             'content': request.content,
             'content_type': request.content_type,
             'context_notes': request.context_notes,
+            'product_name': request.product_name,
+            'host_count': request.host_count,
             'success': False,
             'error': None
         }
         
+        # 产品过滤：只处理 ECS 产品
+        if request.product_name.upper() != "ECS":
+            result['error'] = f"跳过非-ECS产品: {request.product_name}"
+            result['matched_sku'] = 'N/A'
+            result['instance_family'] = 'N/A'
+            result['price_cny_month'] = 'N/A'
+            if verbose:
+                print(f"  ⏭️  跳过非-ECS产品: {request.product_name}\n")
+            return result
+        
         try:
-            # Step 1: Semantic Parsing
+            # Step 1: 数据提取
             if verbose:
-                print(f"  [1/3] 🤖 Semantic Parsing...")
+                print(f"  [STEP 1] 📊 数据提取...")
             
-            requirement = parse_requirement(request)
-            result['cpu_cores'] = requirement.cpu_cores
-            result['memory_gb'] = requirement.memory_gb
-            result['storage_gb'] = requirement.storage_gb
-            result['environment'] = requirement.environment
-            result['workload_type'] = requirement.workload_type
+            if request.cpu_cores is not None and request.memory_gb is not None:
+                # 直接使用结构化数据
+                result['cpu_cores'] = request.cpu_cores
+                result['memory_gb'] = request.memory_gb
+                result['storage_gb'] = request.storage_gb
+                result['workload_type'] = 'general'
+                
+                if verbose:
+                    print(f"        ✅ {result['cpu_cores']}C | {result['memory_gb']}G | {result['storage_gb']}G存储")
+                
+                # 创建 requirement 对象
+                from models import ResourceRequirement
+                requirement = ResourceRequirement(
+                    raw_input=request.content,
+                    cpu_cores=request.cpu_cores,
+                    memory_gb=request.memory_gb,
+                    storage_gb=request.storage_gb,
+                    environment='prod',
+                    workload_type='general'
+                )
+            else:
+                # 需要AI解析
+                if verbose:
+                    print(f"  [STEP 1] 🤖 AI语义解析...")
+                
+                requirement = parse_requirement(request)
+                result['cpu_cores'] = requirement.cpu_cores
+                result['memory_gb'] = requirement.memory_gb
+                result['storage_gb'] = requirement.storage_gb
+                result['workload_type'] = requirement.workload_type
+                
+                if verbose:
+                    print(f"        ✅ {requirement.cpu_cores}C | {requirement.memory_gb}G | {requirement.storage_gb}G存储")
+                    print(f"        ✅ Workload: {requirement.workload_type}")
             
-            if verbose:
-                print(f"        ✅ {requirement.cpu_cores}C | {requirement.memory_gb}G | {requirement.storage_gb}G存储")
-                print(f"        ✅ Environment: {requirement.environment} | Workload: {requirement.workload_type}")
-            
-            # Step 2: SKU Matching
-            if verbose:
-                print(f"  [2/3] 🎯 SKU Grounding...")
-            
-            instance_sku = get_best_instance_sku(requirement)
+            # Step 2: SKU推荐 (使用 DescribeRecommendInstanceType API)
+            instance_sku = self.sku_recommend_service.get_best_instance_sku(requirement)
             instance_family = get_instance_family_name(instance_sku)
             result['matched_sku'] = instance_sku
             result['instance_family'] = instance_family
@@ -127,13 +165,13 @@ class BatchQuotationProcessor:
             
             # Step 3: Price Query (Phase 5: Monthly pricing)
             if verbose:
-                print(f"  [3/3] 💰 Fetching Price...")
+                print(f"  [STEP 3] 💰 查询价格 (包年包月)...")
             
             price = self.pricing_service.get_official_price(
                 instance_type=instance_sku,
                 region=self.region,
-                period=1,      # 1 Month (Phase 5 default)
-                unit="Month"   # Phase 5: Monthly pricing
+                period=1,
+                unit="Month"
             )
             result['price_cny_month'] = price
             result['success'] = True
@@ -221,12 +259,13 @@ class BatchQuotationProcessor:
         for result in self.results:
             row = {
                 'Source ID': result['source_id'],
+                'Product Name': result.get('product_name', 'ECS'),  # 添加产品名称
                 'Original Content': result['content'],
                 'Context Notes': result.get('context_notes', ''),
+                'Host Count': result.get('host_count', 1),
                 'CPU Cores': result.get('cpu_cores', 'N/A'),
                 'Memory (GB)': result.get('memory_gb', 'N/A'),
                 'Storage (GB)': result.get('storage_gb', 'N/A'),
-                'Environment': result.get('environment', 'N/A'),
                 'Workload Type': result.get('workload_type', 'N/A'),
                 'Matched SKU': result.get('matched_sku', 'N/A'),
                 'Instance Family': result.get('instance_family', 'N/A'),
