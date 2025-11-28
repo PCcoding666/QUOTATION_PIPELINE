@@ -3,7 +3,7 @@
 SKU Matcher - The Grounding Layer
 Translates Abstract Intent into Concrete Alibaba Cloud Product SKUs
 """
-from models import ResourceRequirement
+from app.models import ResourceRequirement
 from typing import Dict, Tuple, Optional
 import logging
 

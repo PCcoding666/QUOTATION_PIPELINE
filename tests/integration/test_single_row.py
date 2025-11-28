@@ -5,10 +5,10 @@
 """
 import os
 from dotenv import load_dotenv
-from data_ingestion import QuotationRequest
-from batch_processor import BatchQuotationProcessor
-from pricing_service import PricingService
-from sku_recommend_service import SKURecommendService
+from app.data.data_ingestion import QuotationRequest
+from app.data.batch_processor import BatchQuotationProcessor
+from app.core.pricing_service import PricingService
+from app.core.sku_recommend_service import SKURecommendService
 
 load_dotenv()
 

@@ -34,68 +34,71 @@ Quotation Pipeline 是一个智能化的云服务器报价系统，通过集成�
 ```mermaid
 graph TB
     subgraph "输入层"
-        A[Excel文件] --> B[LLM驱动数据加载器]
+        A[Excel文件<br/>多工作表支持] --> B[LLMDrivenExcelLoader<br/>Qwen-Plus驱动]
     end
     
-    subgraph "数据处理层"
-        B --> C{产品类型判断}
-        C -->|ECS| D[数据提取]
-        C -->|非ECS| E[跳过处理]
-        D --> F[AI语义解析<br/>Qwen-Plus]
+    subgraph "AI解析层"
+        B --> C[半结构化数据提取]
+        C --> D[AI语义解析<br/>Qwen-Plus]
+        D --> E{产品类型识别}
+        E -->|ECS| F[QuotationRequest]
+        E -->|非ECS| G[标记跳过]
     end
     
     subgraph "SKU推荐层"
-        F --> G[SKU推荐服务]
-        G --> H{API调用}
-        H -->|成功| I[DescribeRecommendInstanceType<br/>API]
-        H -->|失败| J[兜底映射规则]
-        I --> K[推荐实例规格]
-        J --> K
+        F --> H[SKURecommendService]
+        H --> I{DescribeRecommendInstanceType<br/>API调用}
+        I -->|成功| J[实例规格推荐<br/>g9i/u1/u2系列]
+        I -->|失败| K[兜底映射规则<br/>g6/c6/r6系列]
+        J --> L[最优实例SKU]
+        K --> L
     end
     
     subgraph "定价查询层"
-        K --> L[价格查询服务]
-        L --> M[GetSubscriptionPrice<br/>API包年包月]
-        M --> N[官方价格]
+        L --> M[PricingService]
+        M --> N[DescribePrice API<br/>包年包月PrePaid]
+        N --> O[实例价格+存储价格]
+        O --> P[月度总价]
     end
     
     subgraph "输出层"
-        N --> O[批处理结果]
-        E --> O
-        O --> P[Excel报价表]
-        O --> Q[统计汇总]
+        P --> Q[BatchQuotationProcessor]
+        G --> Q
+        Q --> R[Excel报价表<br/>按工作表输出]
+        Q --> S[统计汇总<br/>成本+资源]
     end
-    
-    style C fill:#fff3cd
-    style E fill:#f8d7da
-    style G fill:#d1ecf1
-    style M fill:#d4edda
-```
 
 ### 核心组件架构
 
 ```mermaid
-graph LR
-    subgraph "核心服务"
-        A[SKURecommendService] --> B[ECS Client]
-        C[PricingService] --> D[BSS Client]
-        E[LLMDrivenExcelLoader] --> F[DashScope API]
+graph TB
+    subgraph "数据摄入层"
+        A[LLMDrivenExcelLoader] --> B[DashScope API<br/>Qwen-Plus]
+        A --> C[OpenPyXL<br/>Excel读取]
     end
     
-    subgraph "业务逻辑"
-        G[BatchQuotationProcessor]
-        G --> A
-        G --> C
-        G --> H[SemanticParser]
+    subgraph "核心服务层"
+        D[SKURecommendService] --> E[ECS API Client<br/>实例推荐]
+        F[PricingService] --> G[ECS API Client<br/>价格查询]
     end
     
-    subgraph "数据模型"
-        I[QuotationRequest]
-        J[ResourceRequirement]
-        I --> G
-        H --> J
+    subgraph "业务处理层"
+        H[BatchQuotationProcessor]
+        H --> D
+        H --> F
+        H --> I[产品过滤器<br/>仅处理ECS]
     end
-```
+    
+    subgraph "数据模型层"
+        J[QuotationRequest] --> H
+        A --> J
+        H --> K[处理结果<br/>Result Dict]
+    end
+    
+    subgraph "输出层"
+        K --> L[Pandas DataFrame]
+        L --> M[Excel Writer<br/>多工作表输出]
+    end
 
 ## 📈 业务流程时序图
 
@@ -103,6 +106,8 @@ graph LR
 
 ```mermaid
 sequenceDiagram
+    participant User as 用户
+    participant Pipeline as run_pipeline.py
     participant Excel as Excel文件
     participant Loader as LLMDrivenExcelLoader
     participant Qwen as Qwen-Plus AI
@@ -110,102 +115,134 @@ sequenceDiagram
     participant SKU as SKURecommendService
     participant ECS as ECS API
     participant Price as PricingService
-    participant BSS as BSS API
     participant Output as Excel输出
 
-    Excel->>Loader: 读取工作表数据
-    Loader->>Loader: 提取半结构化数据
-    Loader->>Qwen: 调用AI解析<br/>(CPU/内存/产品名称)
-    Qwen-->>Loader: 返回解析结果
-    Loader->>Processor: QuotationRequest列表
+    User->>Pipeline: 执行报价流程
+    Pipeline->>Excel: 读取工作表列表
+    Excel-->>Pipeline: 返回所有工作表名称
     
-    loop 每个请求
-        Processor->>Processor: 检查产品类型
-        alt 非ECS产品
-            Processor->>Output: 标记"跳过"
-        else ECS产品
-            Processor->>SKU: 请求SKU推荐<br/>(CPU + 内存)
-            
-            SKU->>ECS: DescribeRecommendInstanceType
-            alt API成功
-                ECS-->>SKU: 推荐实例规格
-            else API失败
-                SKU->>SKU: 使用兜底映射规则
+    loop 每个工作表
+        Pipeline->>Loader: load_data(sheet_name)
+        Loader->>Excel: 读取工作表数据
+        Excel-->>Loader: 返回原始表格数据
+        Loader->>Loader: 提取半结构化数据<br/>(行号+内容+上下文)
+        Loader->>Qwen: AI解析请求<br/>(CPU/内存/产品/主机数/存储)
+        Qwen-->>Loader: 返回结构化数据
+        Loader-->>Pipeline: QuotationRequest列表
+        
+        Pipeline->>Processor: process_batch(requests)
+        
+        loop 每个请求
+            Processor->>Processor: 检查产品类型
+            alt 非ECS产品
+                Processor->>Processor: 标记"跳过非-ECS产品"
+            else ECS产品
+                Processor->>SKU: recommend_instance_type<br/>(CPU核心+内存GB)
+                SKU->>ECS: DescribeRecommendInstanceType<br/>InventoryFirst策略
+                alt API成功
+                    ECS-->>SKU: 返回推荐实例<br/>(g9i/u1/u2系列)
+                else API失败
+                    SKU->>SKU: 兜底映射规则<br/>(g6/c6/r6系列)
+                end
+                SKU-->>Processor: 实例SKU
+                
+                Processor->>Price: get_instance_price<br/>(实例类型+区域+存储)
+                Price->>ECS: DescribePrice<br/>PrePaid包年包月
+                ECS-->>Price: 实例价格+存储价格
+                Price-->>Processor: 月度总价(CNY)
+                
+                Processor->>Processor: 记录完整报价结果
             end
-            SKU-->>Processor: 返回实例SKU
-            
-            Processor->>Price: 查询价格<br/>(包年包月)
-            Price->>BSS: GetSubscriptionPrice
-            BSS-->>Price: 官方价格
-            Price-->>Processor: 月度价格
-            
-            Processor->>Output: 完整报价记录
         end
+        
+        Processor-->>Pipeline: 返回处理结果列表
+        Pipeline->>Output: export_to_excel<br/>(output_{sheet_name}.xlsx)
+        Output-->>Pipeline: 保存成功
+        
+        Pipeline->>Pipeline: 统计汇总<br/>(成功率/主机数/成本)
     end
     
-    Output->>Output: 生成Excel报表
-    Output->>Output: 统计汇总
-```
+    Pipeline->>Pipeline: 生成全局汇总
+    Pipeline-->>User: 显示统计报告<br/>(月度/年度成本)
 
 ### SKU推荐详细流程
 
 ```mermaid
 sequenceDiagram
-    participant Req as 资源需求
+    participant Processor as BatchProcessor
     participant SKU as SKURecommendService
     participant API as ECS API
     participant Fallback as 兜底规则
     
-    Req->>SKU: get_best_instance_sku()<br/>(16C 64G)
+    Processor->>SKU: recommend_instance_type<br/>(cpu_cores=16, memory_gb=64)
     
-    SKU->>API: DescribeRecommendInstanceType<br/>cores=16, memory=64<br/>instance_charge_type=PrePaid<br/>instance_type_family=['g6','c6','r6']
+    SKU->>SKU: 构建API请求参数<br/>instance_charge_type=PrePaid<br/>priority_strategy=InventoryFirst
+    
+    SKU->>API: DescribeRecommendInstanceType<br/>Cores=16<br/>Memory=65536MB<br/>NetworkType=vpc<br/>IoOptimized=optimized
     
     alt API调用成功
-        API-->>SKU: ecs.g6.4xlarge<br/>(16C 65536M)
-        SKU-->>Req: ecs.g6.4xlarge
-    else API失败/库存不足
-        API-->>SKU: Error: InstanceTypeSoldOut
-        SKU->>Fallback: _fallback_sku_mapping(16, 64)
-        Fallback->>Fallback: 精确匹配<br/>(16, 64) -> ecs.g6.4xlarge
+        API-->>SKU: 返回推荐列表<br/>Zone A: ecs.g9i.4xlarge<br/>Zone B: ecs.u1-c1m4.4xlarge
+        SKU->>SKU: 选择第一个推荐<br/>(库存优先)
+        SKU-->>Processor: ecs.g9i.4xlarge
+    else API失败或无库存
+        API-->>SKU: Error或空列表
+        SKU->>SKU: 触发兜底机制
+        SKU->>Fallback: _fallback_sku_mapping<br/>(16, 64)
+        Fallback->>Fallback: 精确匹配规则<br/>(16C, 64G) → ecs.g6.4xlarge
         Fallback-->>SKU: ecs.g6.4xlarge
-        SKU-->>Req: ecs.g6.4xlarge
+        SKU-->>Processor: ecs.g6.4xlarge
     end
-```
+    
+    Note over Processor,Fallback: 推荐策略: 优先最新代际(g9i)→高性价比(u1/u2)→兜底(g6)
 
 ### 多工作表处理流程
 
 ```mermaid
 sequenceDiagram
     participant User as 用户
-    participant Script as test_multi_sheet.py
+    participant Pipeline as run_pipeline.py
     participant Excel as Excel文件
-    participant Loader as DataLoader
+    participant Loader as LLMDrivenExcelLoader
     participant Processor as BatchProcessor
-    participant Output as 输出文件
+    participant Output as 输出目录
 
-    User->>Script: 执行测试
-    Script->>Excel: 读取工作表列表
-    Excel-->>Script: ['资源总量', '标准-开发', '标准-测试', '标准-生产']
+    User->>Pipeline: python run_pipeline.py
+    Pipeline->>Pipeline: 加载环境变量<br/>(API Keys)
+    Pipeline->>Excel: openpyxl.load_workbook()
+    Excel-->>Pipeline: 返回工作簿对象
+    Pipeline->>Excel: 获取工作表列表
+    Excel-->>Pipeline: sheet_names列表
     
-    Script->>Script: 跳过第1张汇总表
-    Script->>Script: sheets = [开发, 测试, 生产]
+    Pipeline->>Pipeline: 创建服务实例<br/>(SKUService+PricingService)
     
     loop 每个工作表
-        Script->>Loader: load_data(sheet_name)
-        Loader->>Loader: 解析工作表数据
-        Loader-->>Script: QuotationRequest列表
+        Pipeline->>Loader: load_data(sheet_name)
+        Loader->>Excel: 读取工作表数据
+        Loader->>Loader: AI解析<br/>(Qwen-Plus)
+        Loader-->>Pipeline: QuotationRequest列表
         
-        Script->>Processor: process_batch()
-        Processor->>Processor: 处理所有请求
-        Processor-->>Script: 处理结果
+        Pipeline->>Processor: process_batch(loader)
         
-        Script->>Output: export_to_excel()<br/>(独立输出文件)
-        Output-->>Script: output_{sheet_name}.xlsx
+        loop 每个配置项
+            Processor->>Processor: 产品过滤
+            alt ECS产品
+                Processor->>Processor: SKU推荐+价格查询
+            else 非ECS
+                Processor->>Processor: 标记跳过
+            end
+        end
+        
+        Processor-->>Pipeline: results列表
+        
+        Pipeline->>Output: export_to_excel<br/>(output_{sheet}_{timestamp}.xlsx)
+        Output-->>Pipeline: 文件已保存
+        
+        Pipeline->>Pipeline: 累计统计数据<br/>(主机/CPU/内存/成本)
     end
     
-    Script->>Script: 生成全局汇总统计
-    Script-->>User: 完成<br/>(3个输出文件 + 汇总)
-```
+    Pipeline->>Pipeline: 生成全局汇总报告<br/>(成功率+总成本)
+    Pipeline->>User: 显示完整统计<br/>(月度¥XXX/年度¥XXX)
+    Pipeline-->>User: 处理完成<br/>(N个输出文件)
 
 ## 🔧 核心功能
 
@@ -214,7 +251,7 @@ sequenceDiagram
 使用Qwen-Plus智能识别Excel表格中的资源配置信息：
 
 ```python
-from data_ingestion import LLMDrivenExcelLoader
+from app.data.data_ingestion import LLMDrivenExcelLoader
 
 loader = LLMDrivenExcelLoader(
     file_path="quotation.xlsx",
@@ -237,7 +274,7 @@ for request in loader.load_data(sheet_name="标准-生产"):
 基于阿里云API实时推荐最优实例规格：
 
 ```python
-from sku_recommend_service import SKURecommendService
+from app.core.sku_recommend_service import SKURecommendService
 
 sku_service = SKURecommendService(
     access_key_id=access_key_id,
@@ -275,7 +312,7 @@ instance_type = sku_service.recommend_instance_type(
 调用阿里云BSS OpenAPI获取官方价格：
 
 ```python
-from pricing_service import PricingService
+from app.core.pricing_service import PricingService
 
 pricing_service = PricingService(
     access_key_id=access_key_id,
@@ -295,7 +332,7 @@ price = pricing_service.get_official_price(
 ### 4. 批量处理和多工作表支持
 
 ```python
-from batch_processor import BatchQuotationProcessor
+from app.data.batch_processor import BatchQuotationProcessor
 
 processor = BatchQuotationProcessor(
     pricing_service=pricing_service,
@@ -334,6 +371,55 @@ for sheet_name in ["标准-开发", "标准-测试", "标准-生产"]:
 
 ## 🚀 快速开始
 
+### 项目结构
+
+```
+Quotation_Pipeline/
+├── app/                          # 核心业务代码包
+│   ├── __init__.py
+│   ├── models.py                # 数据模型定义
+│   ├── core/                    # 核心服务层
+│   │   ├── __init__.py
+│   │   ├── pricing_service.py  # 价格查询服务
+│   │   ├── sku_recommend_service.py  # SKU推荐服务
+│   │   └── semantic_parser.py  # 语义解析服务
+│   ├── data/                    # 数据处理层
+│   │   ├── __init__.py
+│   │   ├── data_ingestion.py   # 数据摄入
+│   │   └── batch_processor.py  # 批处理器
+│   └── matchers/                # 匹配器模块
+│       ├── __init__.py
+│       └── sku_matcher.py      # SKU匹配器
+│
+├── tests/                       # 测试目录
+│   ├── __init__.py
+│   ├── data/                    # 测试数据
+│   │   └── xlsx/
+│   ├── output/                  # 测试输出
+│   ├── unit/                    # 单元测试
+│   ├── integration/             # 集成测试
+│   │   ├── test_single_row.py
+│   │   ├── test_new_system.py
+│   │   └── test_multi_sheet.py
+│   └── e2e/                     # 端到端测试
+│       ├── test_e2e_real_world.py
+│       └── create_sample_test_data.py
+│
+├── scripts/                     # 工具脚本
+│   └── demo_llm_parser.py      # 演示脚本
+│
+├── docs/                        # 文档目录
+│   ├── CHANGELOG.md
+│   ├── TESTING_GUIDE.md
+│   └── PHASE6_COMPLETION_SUMMARY.md
+│
+├── main.py                      # 主入口文件
+├── requirements.txt             # 依赖管理
+├── .env.example                 # 环境变量示例
+├── .gitignore                   # Git忽略规则
+└── README.md                    # 项目说明
+```
+
 ### 1. 环境准备
 
 ```bash
@@ -362,22 +448,25 @@ DASHSCOPE_API_KEY=your_dashscope_api_key
 
 ```bash
 # 测试单行数据处理
-python3 test_single_row.py
+python3 tests/integration/test_single_row.py
 
 # 测试新系统（SKU推荐+价格查询）
-python3 test_new_system.py
+python3 tests/integration/test_new_system.py
 
 # 测试多工作表处理
-python3 test_multi_sheet.py
+python3 tests/integration/test_multi_sheet.py
+
+# 运行端到端测试
+python3 tests/e2e/test_e2e_real_world.py
 ```
 
 ### 4. 处理实际数据
 
 ```python
-from data_ingestion import LLMDrivenExcelLoader
-from batch_processor import BatchQuotationProcessor
-from pricing_service import PricingService
-from sku_recommend_service import SKURecommendService
+from app.data.data_ingestion import LLMDrivenExcelLoader
+from app.data.batch_processor import BatchQuotationProcessor
+from app.core.pricing_service import PricingService
+from app.core.sku_recommend_service import SKURecommendService
 import os
 
 # 初始化服务

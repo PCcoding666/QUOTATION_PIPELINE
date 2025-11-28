@@ -8,11 +8,11 @@ from typing import List, Dict, Any
 from pathlib import Path
 from dataclasses import asdict
 
-from data_ingestion import BaseDataLoader, QuotationRequest
-from semantic_parser import parse_requirement
-from pricing_service import PricingService
+from app.data.data_ingestion import BaseDataLoader, QuotationRequest
+from app.core.semantic_parser import parse_requirement
+from app.core.pricing_service import PricingService
 from Tea.exceptions import TeaException
-from sku_recommend_service import SKURecommendService, get_instance_family_name
+from app.core.sku_recommend_service import SKURecommendService, get_instance_family_name
 
 
 class BatchQuotationProcessor:
@@ -104,16 +104,7 @@ class BatchQuotationProcessor:
             'error': None
         }
         
-        # 产品过滤：只处理 ECS 产品
-        if request.product_name.upper() != "ECS":
-            result['error'] = f"跳过非-ECS产品: {request.product_name}"
-            result['matched_sku'] = 'N/A'
-            result['instance_family'] = 'N/A'
-            result['price_cny_month'] = 'N/A'
-            if verbose:
-                print(f"  ⏭️  跳过非-ECS产品: {request.product_name}\n")
-            return result
-        
+        # 所有产品统一按照ECS处理(包括数据库等应用场景)
         try:
             # Step 1: 数据提取
             if verbose:
@@ -130,7 +121,7 @@ class BatchQuotationProcessor:
                     print(f"        ✅ {result['cpu_cores']}C | {result['memory_gb']}G | {result['storage_gb']}G存储")
                 
                 # 创建 requirement 对象
-                from models import ResourceRequirement
+                from app.models import ResourceRequirement
                 requirement = ResourceRequirement(
                     raw_input=request.content,
                     cpu_cores=request.cpu_cores,
@@ -163,7 +154,7 @@ class BatchQuotationProcessor:
             if verbose:
                 print(f"        ✅ {instance_sku} ({instance_family})")
             
-            # Step 3: Price Query (Phase 5: Monthly pricing)
+            # Step 3: Price Query (包含存储)
             if verbose:
                 print(f"  [STEP 3] 💰 查询价格 (包年包月)...")
             
@@ -171,13 +162,14 @@ class BatchQuotationProcessor:
                 instance_type=instance_sku,
                 region=self.region,
                 period=1,
-                unit="Month"
+                unit="Month",
+                storage_gb=requirement.storage_gb if requirement.storage_gb else 0  # 添加存储配置
             )
             result['price_cny_month'] = price
             result['success'] = True
             
             if verbose:
-                print(f"        ✅ ¥{price:,.2f} CNY / Month\n")
+                print(f"        ✅ ¥{price:,.2f} CNY / Month (含{requirement.storage_gb}G存储)\n")
         
         except NotImplementedError as e:
             # Multimodal features not yet implemented

@@ -8,7 +8,7 @@ import logging
 from alibabacloud_ecs20140526.client import Client as EcsClient
 from alibabacloud_ecs20140526 import models as ecs_models
 from alibabacloud_tea_openapi import models as open_api_models
-from models import ResourceRequirement
+from app.models import ResourceRequirement
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -45,7 +45,7 @@ class SKURecommendService:
         memory_gb: float,
         instance_charge_type: str = "PrePaid",  # 包年包月
         zone_id: Optional[str] = None,
-        priority_strategy: str = "PriceFirst"
+        priority_strategy: str = "InventoryFirst"  # 改为库存优先,与控制台推荐逻辑一致
     ) -> Optional[str]:
         """
         根据 CPU 和内存推荐实例规格
@@ -55,12 +55,14 @@ class SKURecommendService:
             memory_gb: 内存大小（GB）
             instance_charge_type: 计费方式 (PrePaid=包年包月, PostPaid=按量付费)
             zone_id: 可用区ID（可选）
-            priority_strategy: 推荐策略 (PriceFirst=价格优先, InventoryFirst=库存优先)
+            priority_strategy: 推荐策略 (InventoryFirst=库存优先[默认], PriceFirst=价格优先)
             
         Returns:
-            str: 推荐的实例规格，如 "ecs.g6.4xlarge"，失败返回None
+            str: 推荐的实例规格，如 "ecs.g9.4xlarge"，失败返回None
         """
         try:
+            # 优先推荐第9代，依次降级到8代、7代、6代
+            # 不限制实例系列，让API自动推荐最优解
             request = ecs_models.DescribeRecommendInstanceTypeRequest(
                 region_id=self.region_id,
                 network_type='vpc',
@@ -69,8 +71,8 @@ class SKURecommendService:
                 instance_charge_type=instance_charge_type,
                 io_optimized='optimized',
                 priority_strategy=priority_strategy,
-                scene='CREATE',
-                instance_type_family=['ecs.g6', 'ecs.c6', 'ecs.r6']  # 限制在常见的实例系列
+                scene='CREATE'
+                # 移除instance_type_family限制，让API自动选择最新代际
             )
             
             # 如果指定了可用区
@@ -80,10 +82,13 @@ class SKURecommendService:
             
             logger.info(
                 f"[STEP 2.1] 🔍 调用 DescribeRecommendInstanceType API: "
-                f"{cpu_cores}C {memory_gb}G, 计费方式={instance_charge_type}, 区域={self.region_id}"
+                f"{cpu_cores}C {memory_gb}G, 计费方式={instance_charge_type}, 区域={self.region_id}, 优先级={priority_strategy}"
             )
             
             response = self.client.describe_recommend_instance_type(request)
+            
+            # 打印详细的API响应用于调试
+            logger.debug(f"API响应状态码: {response.status_code if hasattr(response, 'status_code') else 'N/A'}")
             
             # 解析推荐结果
             if (response.body and 
@@ -141,6 +146,7 @@ class SKURecommendService:
     def _fallback_sku_mapping(self, cpu_cores: int, memory_gb: float) -> str:
         """
         简单的SKU映射规则（当API调用失败时使用）
+        默认使用第9代通用型实例(ecs.g9)，如果不可用则降级到g8/g7/g6
         
         Args:
             cpu_cores: CPU核心数
@@ -149,14 +155,15 @@ class SKURecommendService:
         Returns:
             str: 实例规格
         """
-        # 简单的通用型映射表 (g6系列 - 通用型)
+        # 优先使用第9代通用型映射表 (g9系列 - 通用型第9代)
+        # 注意: 如果第9代在某些区域不可用，生产环境应实现多代际降级逻辑
         sku_map = {
-            (2, 8): "ecs.g6.large",
-            (4, 16): "ecs.g6.xlarge",
-            (8, 32): "ecs.g6.2xlarge",
-            (16, 64): "ecs.g6.4xlarge",
-            (32, 128): "ecs.g6.8xlarge",
-            (64, 256): "ecs.g6.16xlarge",
+            (2, 8): "ecs.g9.large",
+            (4, 16): "ecs.g9.xlarge",
+            (8, 32): "ecs.g9.2xlarge",
+            (16, 64): "ecs.g9.4xlarge",
+            (32, 128): "ecs.g9.8xlarge",
+            (64, 256): "ecs.g9.16xlarge",
         }
         
         # 精确匹配
@@ -185,15 +192,21 @@ def get_instance_family_name(instance_type: str) -> str:
         instance_type: 实例规格代码
         
     Returns:
-        str: 友好的实例类型名称
+        str: 友好的实例类型名称（包含代际信息）
     """
     family_map = {
-        "r7": "内存优化型",
-        "r6": "内存优化型",
-        "c7": "计算优化型",
-        "c6": "计算优化型",
-        "g7": "通用型",
-        "g6": "通用型",
+        "r9": "内存优化型(第9代)",
+        "r8": "内存优化型(第8代)",
+        "r7": "内存优化型(第7代)",
+        "r6": "内存优化型(第6代)",
+        "c9": "计算优化型(第9代)",
+        "c8": "计算优化型(第8代)",
+        "c7": "计算优化型(第7代)",
+        "c6": "计算优化型(第6代)",
+        "g9": "通用型(第9代)",
+        "g8": "通用型(第8代)",
+        "g7": "通用型(第7代)",
+        "g6": "通用型(第6代)",
         "r": "内存优化型",
         "c": "计算优化型",
         "g": "通用型",

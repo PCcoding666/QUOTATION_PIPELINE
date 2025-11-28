@@ -5,8 +5,8 @@
 """
 import os
 from dotenv import load_dotenv
-from sku_recommend_service import SKURecommendService
-from pricing_service import PricingService
+from app.core.sku_recommend_service import SKURecommendService
+from app.core.pricing_service import PricingService
 
 # 加载环境变量
 load_dotenv()

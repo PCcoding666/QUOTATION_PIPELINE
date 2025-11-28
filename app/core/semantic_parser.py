@@ -12,7 +12,7 @@ import json
 import re
 import requests
 from typing import Dict, Any, Literal
-from models import ResourceRequirement
+from app.models import ResourceRequirement
 
 # DashScope API Configuration
 DASHSCOPE_API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
