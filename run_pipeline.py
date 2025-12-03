@@ -26,8 +26,12 @@ def main():
     print("🚀 Quotation Pipeline - 大马彩环境资源需求处理")
     print("="*100 + "\n")
     
-    # 文件路径
-    input_file = "tests/data/xlsx/大马彩环境资源需求（3套环境）.xlsx"
+    # 文件路径 - 可通过命令行参数指定
+    import sys
+    if len(sys.argv) > 1:
+        input_file = sys.argv[1]
+    else:
+        input_file = "tests/data/xlsx/大马彩环境资源需求（3套环境）.xlsx"
     
     if not os.path.exists(input_file):
         print(f"❌ 文件不存在: {input_file}")

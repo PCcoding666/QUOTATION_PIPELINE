@@ -5,10 +5,10 @@
 """
 import os
 from pathlib import Path
-from app.data.data_ingestion import LLMDrivenExcelLoader
-from app.data.batch_processor import BatchQuotationProcessor
-from app.core.pricing_service import PricingService
-from app.core.sku_recommend_service import SKURecommendService
+from data_ingestion import LLMDrivenExcelLoader
+from batch_processor import BatchQuotationProcessor
+from pricing_service import PricingService
+from sku_recommend_service import SKURecommendService
 import openpyxl
 from datetime import datetime
 

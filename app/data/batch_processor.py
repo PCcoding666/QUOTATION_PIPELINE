@@ -104,7 +104,16 @@ class BatchQuotationProcessor:
             'error': None
         }
         
-        # 所有产品统一按照ECS处理(包括数据库等应用场景)
+        # 产品过滤：只处理 ECS 产品
+        if request.product_name.upper() != "ECS":
+            result['error'] = f"跳过非-ECS产品: {request.product_name}"
+            result['matched_sku'] = 'N/A'
+            result['instance_family'] = 'N/A'
+            result['price_cny_month'] = 'N/A'
+            if verbose:
+                print(f"  ⏭️  跳过非-ECS产品: {request.product_name}\n")
+            return result
+        
         try:
             # Step 1: 数据提取
             if verbose:
@@ -154,7 +163,7 @@ class BatchQuotationProcessor:
             if verbose:
                 print(f"        ✅ {instance_sku} ({instance_family})")
             
-            # Step 3: Price Query (包含存储)
+            # Step 3: Price Query (Phase 5: Monthly pricing)
             if verbose:
                 print(f"  [STEP 3] 💰 查询价格 (包年包月)...")
             
@@ -162,14 +171,13 @@ class BatchQuotationProcessor:
                 instance_type=instance_sku,
                 region=self.region,
                 period=1,
-                unit="Month",
-                storage_gb=requirement.storage_gb if requirement.storage_gb else 0  # 添加存储配置
+                unit="Month"
             )
             result['price_cny_month'] = price
             result['success'] = True
             
             if verbose:
-                print(f"        ✅ ¥{price:,.2f} CNY / Month (含{requirement.storage_gb}G存储)\n")
+                print(f"        ✅ ¥{price:,.2f} CNY / Month\n")
         
         except NotImplementedError as e:
             # Multimodal features not yet implemented

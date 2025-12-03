@@ -22,9 +22,10 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dotenv import load_dotenv
-from app.data.data_ingestion import ExcelDataLoader
+from app.data.data_ingestion import ExcelDataLoader, LLMDrivenExcelLoader
 from app.core.semantic_parser import parse_with_qwen
 from app.core.pricing_service import PricingService
+from app.core.sku_recommend_service import SKURecommendService
 from app.data.batch_processor import BatchQuotationProcessor
 
 
@@ -100,7 +101,7 @@ def test_environment_health_check() -> bool:
     
     try:
         # Step 1: Check .env file exists
-        env_file = Path(__file__).parent.parent / ".env"
+        env_file = Path(__file__).parent.parent.parent / ".env"
         logging.debug(f"Checking .env file at: {env_file}")
         
         if not env_file.exists():
@@ -312,7 +313,7 @@ def test_real_data_batch_processing(specific_file: str = None) -> bool:
         # ========================================================================
         logging.info(">>> [STEP 3] Processing Excel files...")
         
-        output_dir = Path(__file__).parent.parent / "tests" / "output"
+        output_dir = Path(__file__).parent.parent / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
         
         all_passed = True
@@ -324,106 +325,102 @@ def test_real_data_batch_processing(specific_file: str = None) -> bool:
             
             try:
                 # ================================================================
-                # Step 3.1: Load Data
+                # Step 3.1: Load Data from ALL Sheets
                 # ================================================================
-                logging.info(">>> [STEP 3.1] Loading data from Excel...")
+                logging.info(">>> [STEP 3.1] Loading data from Excel (all sheets)...")
                 logging.debug(f"File path: {excel_file}")
                 
-                # Try to detect if this is a structured format (multi-column) or simple format
                 import openpyxl
-                wb = openpyxl.load_workbook(str(excel_file))
-                ws = wb.active
+                wb = openpyxl.load_workbook(str(excel_file), data_only=True)
+                sheet_names = wb.sheetnames
+                logging.info(f"📄 Found {len(sheet_names)} sheet(s): {sheet_names}")
                 
-                # Check if first 3 rows contain CPU/Memory/Storage columns
-                is_structured = False
-                header_rows = list(ws.iter_rows(min_row=1, max_row=3, values_only=True))
-                for row in header_rows:
-                    row_text = ' '.join([str(cell) if cell else '' for cell in row])
-                    if 'CPU' in row_text or '核数' in row_text or '内存' in row_text:
-                        is_structured = True
-                        break
-                
-                # 尝试使用LLM驱动模式（更智能、更灵活）
+                # 使用LLM驱动模式
                 use_llm_mode = os.getenv('USE_LLM_PARSER', 'true').lower() == 'true'
                 
-                if use_llm_mode:
-                    logging.info(f"✅ 使用LLM驱动模式（智能自适应解析）")
-                    from data_ingestion import LLMDrivenExcelLoader
-                    data_loader = LLMDrivenExcelLoader(
-                        file_path=str(excel_file)
-                    )
-                elif is_structured:
-                    logging.info(f"✅ Detected structured format (multi-column with CPU/Memory/Storage)")
-                    # Use structured mode
-                    data_loader = ExcelDataLoader(
-                        file_path=str(excel_file),
-                        structured_mode=True,
-                        skip_rows=0
-                    )
-                else:
-                    logging.info(f"✅ Detected simple format (Specification column)")
-                    # Use simple mode - try to detect column names
-                    df_preview = pd.read_excel(excel_file, nrows=0)
-                    logging.debug(f"Available columns: {list(df_preview.columns)}")
-                    
-                    # Try common column names
-                    spec_column = None
-                    remarks_column = None
-                    
-                    for col in df_preview.columns:
-                        col_lower = str(col).lower()
-                        if 'spec' in col_lower or '规格' in col_lower or '配置' in col_lower:
-                            spec_column = col
-                        if 'remark' in col_lower or '备注' in col_lower or 'note' in col_lower:
-                            remarks_column = col
-                    
-                    if not spec_column:
-                        # Use first column as specification
-                        spec_column = df_preview.columns[0]
-                        logging.warning(f"⚠️  Specification column not detected, using first column: {spec_column}")
-                    
-                    if not remarks_column:
-                        remarks_column = "Remarks"  # Will be handled gracefully by ExcelDataLoader
-                    
-                    logging.info(f"✅ Using columns - Spec: '{spec_column}', Remarks: '{remarks_column}'")
-                    
-                    # Load data
-                    data_loader = ExcelDataLoader(
-                        file_path=str(excel_file),
-                        spec_column=spec_column,
-                        remarks_column=remarks_column
-                    )
-                
-                total_count = data_loader.get_total_count()
-                logging.info(f"✅ Loaded {total_count} valid row(s)")
-                
-                # ================================================================
-                # Step 3.2: Run Batch Processing
-                # ================================================================
-                logging.info(">>> [STEP 3.2] Running batch quotation pipeline...")
+                # Initialize SKU Recommend Service
+                sku_service = SKURecommendService(
+                    access_key_id=os.getenv("ALIBABA_CLOUD_ACCESS_KEY_ID"),
+                    access_key_secret=os.getenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET"),
+                    region_id="cn-beijing"
+                )
                 
                 processor = BatchQuotationProcessor(
                     pricing_service=pricing_service,
+                    sku_recommend_service=sku_service,
                     region="cn-beijing"
                 )
                 
-                # Process with detailed logging
-                results = []
-                for req_idx, request in enumerate(data_loader.load_data(), 1):
-                    logging.info(f"─── Processing Row {req_idx}/{total_count} ───")
-                    logging.debug(f"Source: {request.source_id}")
-                    logging.debug(f"Content: {request.content}")
-                    
-                    result = processor._process_single_request(request, verbose=False)
-                    
-                    if result['success']:
-                        logging.info(f"✅ [{req_idx}] {result['cpu_cores']}C {result['memory_gb']}G -> {result['matched_sku']} -> ¥{result['price_cny_month']:.2f}")
-                    else:
-                        logging.warning(f"⚠️  [{req_idx}] Failed: {result['error']}")
-                    
-                    results.append(result)
+                # 遍历所有sheet，收集所有结果
+                all_results = []
+                total_processed = 0
                 
-                processor.results = results
+                for sheet_idx, sheet_name in enumerate(sheet_names, 1):
+                    logging.info("-" * 60)
+                    logging.info(f">>> [SHEET {sheet_idx}/{len(sheet_names)}] Processing: {sheet_name}")
+                    logging.info("-" * 60)
+                    
+                    try:
+                        if use_llm_mode:
+                            logging.info(f"✅ 使用LLM驱动模式解析工作表: {sheet_name}")
+                            data_loader = LLMDrivenExcelLoader(
+                                file_path=str(excel_file)
+                            )
+                            # 解析指定的sheet
+                            requests_list = list(data_loader.load_data(sheet_name=sheet_name))
+                        else:
+                            # 简单模式：使用pandas读取指定的sheet
+                            df_preview = pd.read_excel(excel_file, sheet_name=sheet_name, nrows=0)
+                            spec_column = None
+                            for col in df_preview.columns:
+                                col_lower = str(col).lower()
+                                if 'spec' in col_lower or '规格' in col_lower or '配置' in col_lower:
+                                    spec_column = col
+                                    break
+                            if not spec_column and len(df_preview.columns) > 0:
+                                spec_column = df_preview.columns[0]
+                            
+                            data_loader = ExcelDataLoader(
+                                file_path=str(excel_file),
+                                spec_column=spec_column or "Specification",
+                                remarks_column="Remarks"
+                            )
+                            requests_list = list(data_loader.load_data())
+                        
+                        sheet_count = len(requests_list)
+                        logging.info(f"✅ Sheet [{sheet_name}]: 解析出 {sheet_count} 条资源配置")
+                        
+                        if sheet_count == 0:
+                            logging.warning(f"⚠️  Sheet [{sheet_name}] 无有效数据，跳过")
+                            continue
+                        
+                        # 处理该sheet的所有请求
+                        for req_idx, request in enumerate(requests_list, 1):
+                            total_processed += 1
+                            logging.info(f"─── [{sheet_name}] Processing Row {req_idx}/{sheet_count} ───")
+                            logging.debug(f"Source: {request.source_id}")
+                            logging.debug(f"Content: {request.content}")
+                            
+                            result = processor._process_single_request(request, verbose=False)
+                            
+                            if result['success']:
+                                logging.info(f"✅ [{sheet_name} - {req_idx}] {result['cpu_cores']}C {result['memory_gb']}G -> {result['matched_sku']} -> ¥{result['price_cny_month']:.2f}")
+                            else:
+                                logging.warning(f"⚠️  [{sheet_name} - {req_idx}] Failed: {result['error']}")
+                            
+                            all_results.append(result)
+                        
+                    except Exception as sheet_error:
+                        logging.error(f"❌ Sheet [{sheet_name}] 处理失败: {sheet_error}")
+                        continue
+                
+                logging.info(f"📊 全部Sheet处理完成，共 {total_processed} 条记录")
+                
+                if not all_results:
+                    logging.warning(f"⚠️  文件 [{excel_file.name}] 无有效数据")
+                    continue
+                
+                processor.results = all_results
                 
                 # ================================================================
                 # Step 3.3: Export Results

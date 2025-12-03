@@ -21,6 +21,74 @@ DASHSCOPE_API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/comp
 # In-Memory Cache for LLM Results (Token Optimization)
 _llm_cache: Dict[str, Dict[str, Any]] = {}
 
+# PolarDB相关关键词列表（用于检测非 ECS 场景）
+POLARDB_KEYWORDS = [
+    "polardb", "polar", "PolarDB", "POLARDB",
+    "数据库服务", "云数据库", "rds", "RDS",
+    "mysql实例", "postgresql实例", "数据库实例"
+]
+
+
+def _is_polardb_request(text: str) -> bool:
+    """
+    检测输入文本是否明确提及 PolarDB 相关关键词
+    
+    Args:
+        text: 输入文本
+        
+    Returns:
+        bool: 如果是 PolarDB 相关请求返回 True，否则返回 False
+    """
+    text_lower = text.lower()
+    for keyword in POLARDB_KEYWORDS:
+        if keyword.lower() in text_lower:
+            return True
+    return False
+
+
+def _get_ecs_enhanced_system_prompt(is_ecs_scenario: bool) -> str:
+    """
+    根据场景类型生成增强的系统提示词
+    
+    Args:
+        is_ecs_scenario: 是否为 ECS 实例部署场景
+        
+    Returns:
+        str: 系统提示词
+    """
+    base_prompt = """You are an Alibaba Cloud Architect. Analyze the server requirement string.
+
+**Extraction Rules:**
+1. Extract CPU (int) and Memory (int).
+2. Infer the **Workload Type** based on keywords:
+   - "Database", "Redis", "Cache", "Large Memory" -> "memory_intensive"
+   - "Algorithm", "Training", "Encoding", "High Freq" -> "compute_intensive"
+   - "Web", "App", "Gateway", "General", or Unspecified -> "general_purpose"
+3. Ignore environment stages (Dev/Test/Prod).
+
+**Output Format:**
+Return strictly valid JSON:
+{
+  "cpu": 16,
+  "memory": 64,
+  "workload_type": "memory_intensive" | "compute_intensive" | "general_purpose",
+  "reasoning": "Brief reason for classification"
+}"""
+    
+    if is_ecs_scenario:
+        # ECS 场景增强提示
+        ecs_enhancement = """
+
+**IMPORTANT - ECS Instance Scenario:**
+This request is for an **ECS (Elastic Compute Service) instance deployment**.
+- The output should be interpreted as ECS virtual machine specifications.
+- Focus on CPU cores, memory size, and workload characteristics for ECS SKU matching.
+- Do NOT interpret this as a managed database service (like PolarDB, RDS, etc.).
+- The recommended SKU will be used for ECS instance type selection (e.g., ecs.g9i.xlarge)."""
+        return base_prompt + ecs_enhancement
+    
+    return base_prompt
+
 
 def parse_requirement(request: 'QuotationRequest') -> ResourceRequirement:
     """
@@ -77,6 +145,10 @@ def parse_with_qwen(text: str) -> ResourceRequirement:
     - 智能推理工作负载类型
     - 缓存机制优化token消耗
     
+    增强功能：
+    - 若输入文本中未明确提及 PolarDB 等关键词，默认为 ECS 实例部署场景
+    - 对 ECS 场景增强提示，确保语义解析为 ECS 实例需求
+    
     Args:
         text: 原始非结构化文本输入
         
@@ -100,27 +172,19 @@ def parse_with_qwen(text: str) -> ResourceRequirement:
             workload_type=cached_result["workload_type"]
         )
     
-    # Step 2: Call Qwen-Max for AI analysis
+    # Step 2: 检测是否为 ECS 场景（默认为 ECS，除非明确提及 PolarDB 等关键词）
+    is_ecs_scenario = not _is_polardb_request(text)
+    
+    if is_ecs_scenario:
+        print("💻 ECS Instance Scenario detected - applying ECS-specific parsing")
+    else:
+        print("🗄️  PolarDB/RDS Scenario detected - using standard parsing")
+    
+    # Step 3: Call Qwen-Max for AI analysis with enhanced prompt
     print("🤖 AI analyzing intent via Qwen-Max...")
     
-    system_prompt = """You are an Alibaba Cloud Architect. Analyze the server requirement string.
-
-**Extraction Rules:**
-1. Extract CPU (int) and Memory (int).
-2. Infer the **Workload Type** based on keywords:
-   - "Database", "Redis", "Cache", "Large Memory" -> "memory_intensive"
-   - "Algorithm", "Training", "Encoding", "High Freq" -> "compute_intensive"
-   - "Web", "App", "Gateway", "General", or Unspecified -> "general_purpose"
-3. Ignore environment stages (Dev/Test/Prod).
-
-**Output Format:**
-Return strictly valid JSON:
-{
-  "cpu": 16,
-  "memory": 64,
-  "workload_type": "memory_intensive" | "compute_intensive" | "general_purpose",
-  "reasoning": "Brief reason for classification"
-}"""
+    # 使用增强的系统提示词
+    system_prompt = _get_ecs_enhanced_system_prompt(is_ecs_scenario)
     
     user_prompt = f"Analyze this requirement: {text}"
     

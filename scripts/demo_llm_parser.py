@@ -12,12 +12,9 @@ from dotenv import load_dotenv
 # 加载环境变量
 load_dotenv()
 
-# 添加项目根目录到路径
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from app.data.data_ingestion import LLMDrivenExcelLoader
-from app.data.batch_processor import BatchQuotationProcessor
-from app.core.pricing_service import PricingService
+from data_ingestion import LLMDrivenExcelLoader
+from batch_processor import BatchQuotationProcessor
+from pricing_service import PricingService
 import os
 
 

@@ -7,9 +7,9 @@ import os
 import sys
 from dotenv import load_dotenv
 
-from app.core.pricing_service import PricingService
-from app.data.data_ingestion import ExcelDataLoader
-from app.data.batch_processor import BatchQuotationProcessor
+from pricing_service import PricingService
+from data_ingestion import ExcelDataLoader
+from batch_processor import BatchQuotationProcessor
 
 
 def run_batch_processing():
