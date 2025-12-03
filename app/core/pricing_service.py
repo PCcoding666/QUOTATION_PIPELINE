@@ -38,7 +38,8 @@ class PricingService:
         period: int = 1, 
         unit: str = "Month",
         system_disk_size: int = DEFAULT_SYSTEM_DISK_SIZE,
-        data_disk_size: int = DEFAULT_DATA_DISK_SIZE
+        data_disk_size: int = DEFAULT_DATA_DISK_SIZE,
+        performance_level: str = "PL0"  # 新增：默认使用ESSD PL0
     ) -> float:
         """
         Queries the official list price for an ECS instance using DescribePrice API.
@@ -47,6 +48,7 @@ class PricingService:
         - Switched to DescribePrice API (supports all generations: 5th-9th)
         - Added system disk and data disk configurations
         - Automatic disk type selection based on instance generation
+        - 默认使用ESSD PL0性能等级（最经济选择）
         
         Args:
             instance_type: ECS实例规格 (e.g., "ecs.g7.xlarge")
@@ -55,6 +57,7 @@ class PricingService:
             unit: 时间单位 ("Month" 或 "Year", 默认: "Month")
             system_disk_size: 系统盘大小 (GB, 默认: 40GB)
             data_disk_size: 数据盘大小 (GB, 默认: 100GB)
+            performance_level: ESSD性能等级 ("PL0", "PL1", "PL2", "PL3", 默认: "PL0")
             
         Returns:
             float: 官方价格 (CNY), 包含实例+系统盘+数据盘总价
@@ -65,19 +68,27 @@ class PricingService:
         # 根据实例代际选择合适的磁盘类型
         disk_category = self._get_system_disk_category(instance_type)
         
-        # 创建系统盘配置
+        # 创建系统盘配置（指定性能等级）
         system_disk = ecs_models.DescribePriceRequestSystemDisk(
             category=disk_category,
             size=system_disk_size
         )
         
-        # 创建数据盘配置
-        data_disks = [
-            ecs_models.DescribePriceRequestDataDisk(
-                category=disk_category,
-                size=data_disk_size
-            )
-        ]
+        # 如果是ESSD云盘，添加性能等级
+        if disk_category == 'cloud_essd':
+            system_disk.performance_level = performance_level
+        
+        # 创建数据盘配置（指定性能等级）
+        data_disk = ecs_models.DescribePriceRequestDataDisk(
+            category=disk_category,
+            size=data_disk_size
+        )
+        
+        # 如果是ESSD云盘，添加性能等级
+        if disk_category == 'cloud_essd':
+            data_disk.performance_level = performance_level
+        
+        data_disks = [data_disk]
         
         # 构建DescribePrice请求
         request = ecs_models.DescribePriceRequest(
@@ -97,8 +108,8 @@ class PricingService:
         logger.info(f"  实例规格: {instance_type}")
         logger.info(f"  区域: {region}")
         logger.info(f"  计费周期: {period} {unit}")
-        logger.info(f"  系统盘: {disk_category} {system_disk_size}GB")
-        logger.info(f"  数据盘: {disk_category} {data_disk_size}GB")
+        logger.info(f"  系统盘: {disk_category} {system_disk_size}GB {f'({performance_level})' if disk_category == 'cloud_essd' else ''}")
+        logger.info(f"  数据盘: {disk_category} {data_disk_size}GB {f'({performance_level})' if disk_category == 'cloud_essd' else ''}")
         
         try:
             response = self.client.describe_price(request)
