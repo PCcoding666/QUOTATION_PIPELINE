@@ -22,28 +22,57 @@ DASHSCOPE_API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/comp
 _llm_cache: Dict[str, Dict[str, Any]] = {}
 
 # PolarDB相关关键词列表（用于检测非 ECS 场景）
+# 策略：极其严格，必须同时满足两个条件才识别为 PolarDB：
+#   1. 提到 PolarDB 产品名称
+#   2. 提到 PolarDB 的准确规格型号（如 polar.mysql.x4.large）
+# 否则，即使提到 PolarDB，也视为在 ECS 上部署 PolarDB 应用，识别为 ECS
 POLARDB_KEYWORDS = [
-    "polardb", "polar", "PolarDB", "POLARDB",
-    "数据库服务", "云数据库", "rds", "RDS",
-    "mysql实例", "postgresql实例", "数据库实例"
+    "polardb", "polar db", "polar-db", "PolarDB", "POLARDB",
 ]
 
 
 def _is_polardb_request(text: str) -> bool:
     """
-    检测输入文本是否明确提及 PolarDB 相关关键词
+    检测输入文本是否为 PolarDB 产品规格请求
+    
+    策略：极其严格，必须同时满足两个条件：
+    1. 提到 "PolarDB" 产品名称
+    2. 提到 PolarDB 的准确规格型号（如 polar.mysql.x4.large、polar.pg.x8.medium）
+    
+    否则，即使提到 PolarDB，也视为在 ECS 上部署 PolarDB 应用，识别为 ECS
+    
+    示例：
+    - "16C 64G | PolarDB数据库" → ECS（只是描述，没有准确规格）
+    - "polar.mysql.x4.large" → PolarDB（有准确规格）
+    - "PolarDB polar.mysql.x4.large" → PolarDB（同时满足两个条件）
     
     Args:
         text: 输入文本
         
     Returns:
-        bool: 如果是 PolarDB 相关请求返回 True，否则返回 False
+        bool: 如果是 PolarDB 规格请求返回 True，否则返回 False
     """
     text_lower = text.lower()
-    for keyword in POLARDB_KEYWORDS:
-        if keyword.lower() in text_lower:
-            return True
-    return False
+    
+    # 条件1：检查是否提到 PolarDB 产品名称
+    has_polardb_keyword = False
+    polardb_keywords = ["polardb", "polar db", "polar-db"]
+    
+    for keyword in polardb_keywords:
+        if keyword in text_lower:
+            has_polardb_keyword = True
+            break
+    
+    # 条件2：检查是否包含 PolarDB 的准确规格型号
+    # PolarDB 规格格式：polar.{mysql|pg|o}.{x数字}.{规格}
+    # 例如：polar.mysql.x4.large, polar.pg.x8.medium, polar.o.x4.xlarge
+    import re
+    polardb_spec_pattern = r'polar\.(mysql|pg|o)\.x\d+\.(small|medium|large|xlarge|2xlarge|4xlarge|8xlarge|12xlarge|16xlarge)'
+    has_polardb_spec = bool(re.search(polardb_spec_pattern, text_lower))
+    
+    # 必须同时满足两个条件
+    # 或者单独出现规格型号（规格本身就包含 polar 前缀）
+    return (has_polardb_keyword and has_polardb_spec) or has_polardb_spec
 
 
 def _get_ecs_enhanced_system_prompt(is_ecs_scenario: bool) -> str:

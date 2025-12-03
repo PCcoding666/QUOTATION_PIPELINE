@@ -121,18 +121,21 @@ class SKURecommendService:
     
     def get_best_instance_sku(self, req: ResourceRequirement) -> str:
         """
-        根据资源需求获取最佳实例规格（支持两级推荐机制）
+        根据资源需求获取最佳实例规格（两级推荐机制，无兜底规则）
         
         推荐策略：
         1. NewProductFirst（最新产品优先）- 不限制实例系列，让API返回最新可用产品
         2. 第八代系列（g8y/c8y/r8y）- 如果第一步失败，降级到第八代
-        3. Fallback规则 - 本地映射表兜底
+        3. 所有策略失败 - 抛出异常，不再使用兜底规则
         
         Args:
             req: ResourceRequirement 标准化的资源需求对象
             
         Returns:
             str: 阿里云实例规格代码
+            
+        Raises:
+            Exception: 当所有推荐策略都失败时抛出
         """
         logger.info(f"[STEP 2] 🎯 SKU推荐: {req.cpu_cores}C {req.memory_gb}G")
         
@@ -185,51 +188,18 @@ class SKURecommendService:
                 logger.warning(f"[STEP 2.{sub_step}] ⚠️  未返回结果")
         
         # ========================================
-        # 第三步：本地映射规则兜底
+        # 第三步：所有策略失败，抛出错误
         # ========================================
-        logger.warning(f"[STEP 2.3] ⚠️  所有API策略均失败，使用本地映射规则兜底")
-        recommended_sku = self._fallback_sku_mapping(req.cpu_cores, req.memory_gb)
-        logger.info(f"[STEP 2.3] ✅ 兜底规则匹配: {recommended_sku}")
-        
-        return recommended_sku
+        logger.error(f"[STEP 2.3] ❌ 所有API策略均失败，无法推荐实例规格")
+        raise Exception(
+            f"无法为 {req.cpu_cores}C {req.memory_gb}G 推荐合适的实例规格。\n"
+            f"所有推荐策略（NewProductFirst、第八代降级）均失败。\n"
+            f"可能原因：\n"
+            f"1. 该配置规格过大或过小，超出API推荐范围\n"
+            f"2. 目标区域（{self.region_id}）该配置实例缺货\n"
+            f"3. 网络连接问题或API调用失败"
+        )
     
-    def _fallback_sku_mapping(self, cpu_cores: int, memory_gb: float) -> str:
-        """
-        简单的SKU映射规则（当API调用失败时使用）
-        
-        Args:
-            cpu_cores: CPU核心数
-            memory_gb: 内存大小（GB）
-            
-        Returns:
-            str: 实例规格
-        """
-        # 简单的通用型映射表 (g6系列 - 通用型)
-        sku_map = {
-            (2, 8): "ecs.g6.large",
-            (4, 16): "ecs.g6.xlarge",
-            (8, 32): "ecs.g6.2xlarge",
-            (16, 64): "ecs.g6.4xlarge",
-            (32, 128): "ecs.g6.8xlarge",
-            (64, 256): "ecs.g6.16xlarge",
-        }
-        
-        # 精确匹配
-        key = (cpu_cores, int(memory_gb))
-        if key in sku_map:
-            return sku_map[key]
-        
-        # 模糊匹配 - 找最接近的配置
-        min_distance = float('inf')
-        best_match = "ecs.g6.large"
-        
-        for (cpu, mem), sku in sku_map.items():
-            distance = abs(cpu - cpu_cores) + abs(mem - memory_gb)
-            if distance < min_distance:
-                min_distance = distance
-                best_match = sku
-        
-        return best_match
 
 
 def get_instance_family_name(instance_type: str) -> str:

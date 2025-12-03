@@ -1,10 +1,17 @@
+# Alibaba Cloud SDK
 alibabacloud_bssopenapi20171214
 alibabacloud_ecs20140526
 alibabacloud_tea_openapi
 alibabacloud_tea_console
+
+# Core Dependencies
 python-dotenv
 pydantic
 pandas
 openpyxl
 requests
 dashscope
+
+# Streamlit Frontend
+streamlit>=1.28.0
+pillow>=10.0.0

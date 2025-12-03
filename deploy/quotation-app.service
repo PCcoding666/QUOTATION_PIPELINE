@@ -1,0 +1,26 @@
+[Unit]
+Description=Quotation Pipeline Streamlit Application (Minimalist Version)
+Documentation=https://github.com/PCcoding666/QUOTATION_PIPELINE
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/Quotation_Pipeline
+
+# 环境变量：添加venv路径
+Environment="PATH=/root/Quotation_Pipeline/venv/bin:/usr/local/bin:/usr/bin:/bin"
+
+# 启动命令：Streamlit极简版前端
+ExecStart=/root/Quotation_Pipeline/venv/bin/streamlit run streamlit_app.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true
+
+# 自动重启配置
+Restart=always
+RestartSec=10
+
+# 日志配置
+StandardOutput=append:/var/log/quotation-app.log
+StandardError=append:/var/log/quotation-app-error.log
+
+[Install]
+WantedBy=multi-user.target

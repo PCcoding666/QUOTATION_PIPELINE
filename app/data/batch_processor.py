@@ -167,11 +167,16 @@ class BatchQuotationProcessor:
             if verbose:
                 print(f"  [STEP 3] 💰 查询价格 (包年包月)...")
             
+            # 使用Excel中的Storage值作为数据盘大小，系统盘默认40GB
+            data_disk_size = result.get('storage_gb', 100)  # 默认100GB
+            
             price = self.pricing_service.get_official_price(
                 instance_type=instance_sku,
                 region=self.region,
                 period=1,
-                unit="Month"
+                unit="Month",
+                system_disk_size=40,  # 系统盘固定40GB
+                data_disk_size=data_disk_size  # 使用Excel中的Storage值
             )
             result['price_cny_month'] = price
             result['success'] = True
