@@ -442,26 +442,29 @@ def test_real_data_batch_processing(specific_file: str = None) -> bool:
                 assert output_path.exists(), f"Output file not found: {output_path}"
                 logging.info("✅ Output file exists")
                 
-                # Assertion 2: Output has Price column
+                # Assertion 2: Output has required columns
                 output_df = pd.read_excel(output_path)
-                assert "Price (CNY/Month)" in output_df.columns, "Missing 'Price (CNY/Month)' column"
-                logging.info("✅ 'Price (CNY/Month)' column exists")
+                required_columns = ['服务器类别', '产品名称', '服务数量', 'CPU(core)', 
+                                    '内存(G)', '存储(G)', '产品规格', '列表单价', '折扣', '折后总价']
+                for col in required_columns:
+                    assert col in output_df.columns, f"Missing required column: '{col}'"
+                logging.info(f"✅ All required columns exist: {required_columns}")
                 
-                # Assertion 3: No rows with Status == "Error"
-                error_count = (output_df["Status"] == "Failed").sum()
-                success_count = (output_df["Status"] == "Success").sum()
+                # Assertion 3: Check for data completeness (列表单价 should have values)
+                non_null_prices = output_df['列表单价'].notna().sum()
+                total_rows = len(output_df)
                 
-                logging.info(f"📊 Results: {success_count} success, {error_count} failed")
+                logging.info(f"📊 Results: {non_null_prices}/{total_rows} rows with valid prices")
                 
-                if error_count > 0:
-                    logging.warning(f"⚠️  Found {error_count} failed row(s)")
-                    # Log error details
-                    failed_rows = output_df[output_df["Status"] == "Failed"]
-                    for _, row in failed_rows.iterrows():
-                        logging.warning(f"   - {row['Source ID']}: {row['Error']}")
+                if non_null_prices < total_rows:
+                    logging.warning(f"⚠️  Found {total_rows - non_null_prices} row(s) without prices")
+                    # Log rows without prices
+                    failed_rows = output_df[output_df['列表单价'].isna()]
+                    for idx, row in failed_rows.iterrows():
+                        logging.warning(f"   - Row {idx + 1}: {row.get('产品规格', 'N/A')}")
                 
-                # For test purposes, we allow some failures but log them
-                logging.info(f"✅ Processed file [{excel_file.name}]: {success_count} successes, {error_count} failures")
+                # For test purposes, we allow some missing prices but log them
+                logging.info(f"✅ Processed file [{excel_file.name}]: {non_null_prices} successes, {total_rows - non_null_prices} failures")
                 
             except FileNotFoundError as e:
                 logging.error(f"❌ File not found: {e}")

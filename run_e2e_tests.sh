@@ -10,7 +10,13 @@ echo ""
 
 # Check Python version
 echo "📌 Checking Python environment..."
-if command -v python3 &> /dev/null; then
+
+# Activate virtual environment if it exists
+if [ -d "venv" ]; then
+    echo "✅ Activating virtual environment..."
+    source venv/bin/activate
+    PYTHON_CMD=python
+elif command -v python3 &> /dev/null; then
     PYTHON_CMD=python3
 elif command -v python &> /dev/null; then
     PYTHON_CMD=python
@@ -23,7 +29,7 @@ echo "✅ Using: $PYTHON_CMD ($($PYTHON_CMD --version))"
 echo ""
 
 # Check if in correct directory
-if [ ! -f "tests/test_e2e_real_world.py" ]; then
+if [ ! -f "tests/e2e/test_e2e_real_world.py" ]; then
     echo "❌ Error: Please run this script from the project root directory."
     echo "   Expected: /path/to/Quotation_Pipeline/"
     exit 1
@@ -64,7 +70,7 @@ echo "🏃 Running E2E Integration Tests..."
 echo "======================================================================================================"
 echo ""
 
-$PYTHON_CMD tests/test_e2e_real_world.py --file "$SPECIFIC_FILE"
+$PYTHON_CMD tests/e2e/test_e2e_real_world.py --file "$SPECIFIC_FILE"
 
 # Capture exit code
 EXIT_CODE=$?

@@ -253,30 +253,38 @@ class BatchQuotationProcessor:
         """
         将结果导出到Excel
         
+        仅输出以下10列（严格顺序）：
+        1. 服务器类别 <- context_notes
+        2. 产品名称 <- product_name
+        3. 服务数量 <- host_count
+        4. CPU(core) <- cpu_cores
+        5. 内存(G) <- memory_gb
+        6. 存储(G) <- storage_gb
+        7. 产品规格 <- matched_sku
+        8. 列表单价 <- price_cny_month
+        9. 折扣 <- 空白
+        10. 折后总价 <- 空白
+        
         Args:
             output_path: 输出文件路径
         """
         if not self.results:
             raise ValueError("No results to export. Run process_batch() first.")
         
-        # Prepare data for DataFrame
+        # Prepare data for DataFrame - 仅包含用户指定的10列
         export_data = []
         for result in self.results:
             row = {
-                'Source ID': result['source_id'],
-                'Product Name': result.get('product_name', 'ECS'),  # 添加产品名称
-                'Original Content': result['content'],
-                'Context Notes': result.get('context_notes', ''),
-                'Host Count': result.get('host_count', 1),
-                'CPU Cores': result.get('cpu_cores', 'N/A'),
-                'Memory (GB)': result.get('memory_gb', 'N/A'),
-                'Storage (GB)': result.get('storage_gb', 'N/A'),
-                'Workload Type': result.get('workload_type', 'N/A'),
-                'Matched SKU': result.get('matched_sku', 'N/A'),
-                'Instance Family': result.get('instance_family', 'N/A'),
-                'Price (CNY/Month)': result.get('price_cny_month', 'N/A'),
-                'Status': 'Success' if result['success'] else 'Failed',
-                'Error': result.get('error', '')
+                '服务器类别': result.get('context_notes', ''),
+                '产品名称': result.get('product_name', 'ECS'),
+                '服务数量': result.get('host_count', 1),
+                'CPU(core)': result.get('cpu_cores', 'N/A'),
+                '内存(G)': result.get('memory_gb', 'N/A'),
+                '存储(G)': result.get('storage_gb', 'N/A'),
+                '产品规格': result.get('matched_sku', 'N/A'),
+                '列表单价': result.get('price_cny_month', 'N/A'),
+                '折扣': None,  # 保持空白
+                '折后总价': None  # 保持空白
             }
             export_data.append(row)
         
