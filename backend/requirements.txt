@@ -1,0 +1,24 @@
+# FastAPI框架
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+gunicorn>=21.2.0
+python-multipart>=0.0.6
+
+# 配置管理
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+python-dotenv>=1.0.0
+
+# 阿里云SDK
+alibabacloud_bssopenapi20171214
+alibabacloud_ecs20140526
+alibabacloud_tea_openapi
+alibabacloud_tea_console
+
+# 数据处理
+pandas>=2.1.0
+openpyxl>=3.1.0
+requests>=2.31.0
+
+# AI/LLM
+dashscope>=1.14.0

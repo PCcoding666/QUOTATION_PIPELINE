@@ -1,0 +1,31 @@
+[Unit]
+Description=Quotation Pipeline FastAPI Application
+Documentation=https://github.com/PCcoding666/QUOTATION_PIPELINE
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/Quotation_Pipeline/backend
+
+# 环境变量：添加venv路径
+Environment="PATH=/root/Quotation_Pipeline/venv/bin:/usr/local/bin:/usr/bin:/bin"
+
+# 启动命令：Gunicorn + Uvicorn Workers（3 workers平衡方案）
+ExecStart=/root/Quotation_Pipeline/venv/bin/gunicorn main:app \
+  -w 3 \
+  -k uvicorn.workers.UvicornWorker \
+  --bind 0.0.0.0:8000 \
+  --access-logfile /var/log/quotation-api-access.log \
+  --error-logfile /var/log/quotation-api-error.log
+
+# 自动重启配置
+Restart=always
+RestartSec=10
+
+# 日志配置
+StandardOutput=append:/var/log/quotation-api.log
+StandardError=append:/var/log/quotation-api-error.log
+
+[Install]
+WantedBy=multi-user.target
