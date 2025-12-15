@@ -424,7 +424,7 @@ class LLMDrivenExcelLoader(BaseDataLoader):
         dashscope.api_key = self.api_key
         
         # 构造Prompt
-        system_prompt = """你是一个专业的云资源报价单解析专家。你的任务是从Excel表格数据中提取云服务器资源配置信息。
+        system_prompt = """你是一个专业的云资源报价单解析专家。你的任务是从 Excel 表格数据中提取云服务器资源配置信息。
 
 请仔细分析表格数据，识别出每一个资源配置项，并提取以下信息：
 - 产品名称（如：ECS云服务器、PolarDB数据库、WAF防火墙、云安全中心等，默认为"ECS"）
@@ -445,10 +445,18 @@ class LLMDrivenExcelLoader(BaseDataLoader):
   "description": "资源描述"
 }
 
-注意事项：
-1. 只提取实际的资源配置数据行，忽略标题、表头、空行
-2. CPU和内存必须是有效的正整数
-3. 产品名称识别规则（极其严格）：
+**极其重要的解析原则**：
+1. **每一行独立解析**：每一行数据是一个独立的资源项，**不要将多行的CPU/内存/主机数相加**
+2. **主机数 host_count 的理解**：
+   - 如果表格中明确写了"主机数量"或"数量"列，则使用该值
+   - 如果没有明确标注数量，默认为 1 台
+   - **绝对不要**将多个配置的主机数相加
+3. **合理的规格范围**：
+   - 单台ECS服务器：CPU通常在2-128核，内存在4-1024GB
+   - 如果解析出超过200核或超过2000GB内存，**请检查是否错误地累加了多行数据**
+4. 只提取实际的资源配置数据行，忽略标题、表头、空行
+5. CPU和内存必须是有效的正整数
+6. 产品名称识别规则（极其严格）：
    - **只有**同时满足以下两个条件才识别为 "PolarDB"：
      a) 提到"PolarDB"或"polardb"字样
      b) 提到PolarDB的准确规格型号（如 polar.mysql.x4.large、polar.pg.x8.medium）
@@ -460,10 +468,26 @@ class LLMDrivenExcelLoader(BaseDataLoader):
      * "MySQL实例"、"PostgreSQL实例"、"数据库实例"
      * "数据库服务器"、"多维数据库"、"缓存数据库"
      * 任何其他涉及数据库的描述
-4. 如果某行不包含资源配置信息，不要输出
-5. 数字可能在不同的列中，需要智能识别
-6. 主机数可能用"台"等单位，需要提取数字
-7. 返回的JSON必须是有效的、可以直接解析的格式
+7. 如果某行不包含资源配置信息，不要输出
+8. 数字可能在不同的列中，需要智能识别
+9. 主机数可能用"台"等单位，需要提取数字
+10. 返回的JSON必须是有效的、可以直接解析的格式
+
+**示例**：
+输入：
+第1行: [列2]16C | [列3]64G | [列4]100G | [列5]2台
+第2行: [列2]32C | [列3]128G | [列4]500G | [列5]1台
+
+正确输出：
+[
+  {"row_number": 1, "cpu_cores": 16, "memory_gb": 64, "storage_gb": 100, "host_count": 2, "product_name": "ECS", "description": "16C64G配置"},
+  {"row_number": 2, "cpu_cores": 32, "memory_gb": 128, "storage_gb": 500, "host_count": 1, "product_name": "ECS", "description": "32C128G配置"}
+]
+
+**错误输出（绝对禁止）**：
+[
+  {"row_number": 1, "cpu_cores": 48, "memory_gb": 192, "storage_gb": 600, "host_count": 3, "product_name": "ECS", "description": "总计"}  // ✖ 错误：不要累加
+]
 """
         
         user_prompt = f"""请分析以下Excel表格数据，提取所有云服务器资源配置信息：

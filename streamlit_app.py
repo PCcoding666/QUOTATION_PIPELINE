@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 阿里云ECS智能报价系统 - Streamlit前端界面
-简洁设计：仅作为用户交互入口，所有业务逻辑由后端处理
+简洁设计：仅作为用户交互入口,所有业务逻辑由后端处理
 """
 import streamlit as st
 import pandas as pd
@@ -11,6 +11,8 @@ from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
 import sys
+import logging
+from io import StringIO
 
 # 添加项目路径到系统路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -22,6 +24,76 @@ from app.data.data_ingestion import LLMDrivenExcelLoader
 
 # 加载环境变量
 load_dotenv()
+
+# ============================================================================
+# 日志系统配置
+# ============================================================================
+
+class StreamlitLogHandler(logging.Handler):
+    """
+    自定义日志处理器 - 将日志输出到Streamlit组件
+    """
+    def __init__(self):
+        super().__init__()
+        self.log_buffer = []
+        self.max_logs = 200  # 最多保存200条日志
+    
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            timestamp = datetime.fromtimestamp(record.created).strftime('%H:%M:%S')
+            
+            # 根据日志级别添加emoji
+            if record.levelno >= logging.ERROR:
+                prefix = "❌"
+            elif record.levelno >= logging.WARNING:
+                prefix = "⚠️"
+            elif record.levelno >= logging.INFO:
+                prefix = "ℹ️"
+            else:
+                prefix = "🔍"
+            
+            formatted_msg = f"[{timestamp}] {prefix} {msg}"
+            self.log_buffer.append(formatted_msg)
+            
+            # 保持日志数量在限制之内
+            if len(self.log_buffer) > self.max_logs:
+                self.log_buffer.pop(0)
+        except Exception:
+            self.handleError(record)
+    
+    def get_logs(self):
+        """获取所有日志"""
+        return self.log_buffer
+    
+    def clear_logs(self):
+        """清除日志"""
+        self.log_buffer.clear()
+
+
+def setup_logging():
+    """
+    配置日志系统：同时输出到控制台和Streamlit
+    """
+    # 创建Streamlit日志处理器
+    if 'log_handler' not in st.session_state:
+        st.session_state.log_handler = StreamlitLogHandler()
+        
+        # 配置日志格式
+        formatter = logging.Formatter('%(message)s')
+        st.session_state.log_handler.setFormatter(formatter)
+        
+        # 将处理器添加到root logger
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.INFO)
+        root_logger.addHandler(st.session_state.log_handler)
+        
+        # 也添加到app模块的logger
+        app_logger = logging.getLogger('app')
+        app_logger.setLevel(logging.INFO)
+        app_logger.addHandler(st.session_state.log_handler)
+    
+    return st.session_state.log_handler
 
 # ============================================================================
 # 页面配置
@@ -153,10 +225,28 @@ with st.sidebar:
     st.markdown("---")
     st.caption("💡 计费模式: 包年包月")
     st.caption("🎯 推荐策略: NewProductFirst")
+    
+    # 日志查看区域
+    st.markdown("---")
+    st.markdown("### 📜 处理日志")
+    
+    if 'log_handler' in st.session_state:
+        logs = st.session_state.log_handler.get_logs()
+        if logs:
+            # 显示最后20条日志
+            recent_logs = logs[-20:] if len(logs) > 20 else logs
+            st.code('\n'.join(recent_logs), language='log', line_numbers=False)
+        else:
+            st.info("📋 暂无日志")
+    else:
+        st.info("📋 暂无日志")
 
 # ============================================================================
 # 主界面
 # ============================================================================
+
+# 初始化日志系统
+log_handler = setup_logging()
 
 st.title("💰 阿里云ECS智能报价系统")
 st.caption("上传Excel文件，自动生成报价单")
@@ -175,6 +265,17 @@ uploaded_file = st.file_uploader(
 if uploaded_file:
     st.success(f"✅ 已选择: {uploaded_file.name}")
     
+    # 日志展示区域（位于文件选择后）
+    with st.expander("📜 处理日志", expanded=False):
+        log_container = st.empty()
+        
+        # 清除日志按钮
+        col_clear1, col_clear2 = st.columns([1, 5])
+        with col_clear1:
+            if st.button("🗑️ 清除日志"):
+                log_handler.clear_logs()
+                st.rerun()
+    
     # 开始处理按钮
     if st.button("🚀 开始生成报价", type="primary", use_container_width=True):
         start_processing = True
@@ -183,28 +284,83 @@ if uploaded_file:
     
     # 处理逻辑
     if start_processing:
+        # 清除旧日志
+        log_handler.clear_logs()
+        
         with st.spinner("⚙️ 正在初始化服务..."):
             try:
+                logging.info("🚀 开始初始化服务...")
+                
                 # 初始化服务
                 pricing_service, sku_service, processor = initialize_services(region_id)
-                st.success(f"✅ 服务初始化完成 (区域: {region_id})")
+                logging.info(f"✅ 服务初始化完成 (区域: {region_id})")
                 
                 # 保存文件
                 file_path = save_uploaded_file(uploaded_file)
-                st.info(f"📁 文件已保存: {file_path.name}")
+                logging.info(f"📁 文件已保存: {file_path.name}")
                 
                 # 创建LLM加载器并调用后端处理
-                st.info("🤖 使用AI智能解析 (LLMDrivenExcelLoader)")
-                loader = LLMDrivenExcelLoader(str(file_path))
+                logging.info("🤖 使用AI智能解析 (LLMDrivenExcelLoader)")
                 
-                # 调用后端的process_batch方法
-                with st.spinner("📊 正在处理Excel文件..."):
-                    results = processor.process_batch(loader, verbose=False)
+                # 读取所有Sheet
+                import openpyxl
+                wb = openpyxl.load_workbook(file_path, data_only=True)
+                all_sheets = wb.sheetnames
+                logging.info(f"📋 检测到 {len(all_sheets)} 个工作表: {', '.join(all_sheets)}")
+                
+                # 更新日志显示
+                log_container.code('\n'.join(log_handler.get_logs()), language='log')
+                
+                all_results = []
+                
+                # 遍历处理每个Sheet
+                for sheet_idx, sheet_name in enumerate(all_sheets, 1):
+                    logging.info(f"\n{'='*60}")
+                    logging.info(f"🔄 处理工作表 [{sheet_idx}/{len(all_sheets)}]: {sheet_name}")
+                    logging.info(f"{'='*60}")
+                    
+                    loader = LLMDrivenExcelLoader(str(file_path))
+                    
+                    # 调用后端的process_batch方法，处理指定Sheet
+                    with st.spinner(f"📊 正在处理 [{sheet_name}]..."):
+                        # 修改load_data以支持指定工作表
+                        original_load_data = loader.load_data
+                        
+                        def load_data_with_sheet():
+                            return original_load_data(sheet_name=sheet_name)
+                        
+                        loader.load_data = load_data_with_sheet
+                        
+                        # 初始化新的处理器（避免结果混淆）
+                        sheet_processor = BatchQuotationProcessor(
+                            pricing_service=pricing_service,
+                            sku_recommend_service=sku_service,
+                            region=region_id
+                        )
+                        
+                        results = sheet_processor.process_batch(loader, verbose=False)
+                        
+                        # 为每个结果添加Sheet来源标记
+                        for result in results:
+                            result['sheet_name'] = sheet_name
+                        
+                        all_results.extend(results)
+                        
+                        # 显示当前Sheet的统计
+                        success_count = sum(1 for r in results if r.get('success', False))
+                        logging.info(f"✅ [{sheet_name}] 处理完成: {success_count}/{len(results)} 成功")
+                        
+                        # 更新日志显示
+                        log_container.code('\n'.join(log_handler.get_logs()), language='log')
                 
                 # 转换为DataFrame
-                df_results = pd.DataFrame(results)
+                df_results = pd.DataFrame(all_results)
                 
-                # 统计信息
+                logging.info(f"\n{'='*60}")
+                logging.info("✅ 所有工作表处理完成！")
+                logging.info(f"{'='*60}")
+                
+                # 统计信息（处理前）
                 success_count = df_results['success'].sum() if 'success' in df_results.columns else 0
                 total_count = len(df_results)
                 
@@ -212,11 +368,57 @@ if uploaded_file:
                 successful_df = df_results[df_results['success'] == True]
                 total_price = successful_df['price_cny_month'].sum() if not successful_df.empty else 0
                 
+                # ============================================================
+                # 格式化导出数据：调整列名、顺序和计算公式
+                # ============================================================
+                
+                # 1. 列重命名映射
+                column_mapping = {
+                    'context_notes': '服务器类别',
+                    'product_name': '产品名称',
+                    'host_count': '服务数量',
+                    'cpu_cores': 'CPU(core)',
+                    'memory_gb': '内存(G)',
+                    'storage_gb': '存储(G)',
+                    'matched_sku': '产品规格',
+                    'price_cny_month': '列表单价',
+                    'workload_type': 'workload_type',
+                    'success': 'success',
+                    'error': 'error'
+                }
+                
+                # 2. 重命名列
+                df_export = df_results.rename(columns=column_mapping)
+                
+                # 3. 添加新列：折扣、折后总价
+                df_export['折扣'] = ''  # 空白，用户手动填写
+                df_export['折后总价'] = ''  # 初始为空，后续添加公式
+                
+                # 4. 选择并排序最终列（包含隐藏列）
+                final_columns = [
+                    '服务器类别', '产品名称', '服务数量', 
+                    'success', 'error',  # 保留但稍后隐藏
+                    'CPU(core)', '内存(G)', '存储(G)', 'workload_type',
+                    '产品规格', '列表单价', '折扣', '折后总价'
+                ]
+                
+                # 确保所有列都存在
+                for col in final_columns:
+                    if col not in df_export.columns:
+                        df_export[col] = ''
+                
+                df_export = df_export[final_columns]
+                
+                logging.info(f"📊 总条数: {total_count}, 成功: {success_count}, 总价: ¥{total_price:,.2f}/月")
+                
+                # 最终更新日志显示
+                log_container.code('\n'.join(log_handler.get_logs()), language='log')
+                
                 # 显示结果
-                st.success("✅ 处理完成！")
+                st.success("✅ 所有工作表处理完成！")
                 
                 st.markdown("---")
-                st.subheader("📊 处理结果")
+                st.subheader("📊 处理结果（汇总）")
                 
                 # 统计信息
                 col1, col2, col3 = st.columns(3)
@@ -227,8 +429,8 @@ if uploaded_file:
                 with col3:
                     st.metric("总价(月)", f"¥{total_price:,.2f}")
                 
-                # 显示详细结果表格
-                st.dataframe(df_results, use_container_width=True, height=400)
+                # 显示详细结果表格（显示格式化后的数据）
+                st.dataframe(df_export, use_container_width=True, height=400)
                 
                 # 导出Excel
                 st.markdown("---")
@@ -239,7 +441,97 @@ if uploaded_file:
                 output_filename = f"quotation_{Path(uploaded_file.name).stem}_{timestamp}.xlsx"
                 output_path = output_dir / output_filename
                 
-                df_results.to_excel(output_path, index=False, engine='openpyxl')
+                # ============================================================
+                # 使用openpyxl导出Excel，添加公式和隐藏列
+                # ============================================================
+                from openpyxl import Workbook
+                from openpyxl.utils.dataframe import dataframe_to_rows
+                from openpyxl.styles import Font, Alignment
+                
+                wb = Workbook()
+                ws = wb.active
+                ws.title = "报价单"
+                
+                # 1. 写入表头
+                headers = list(df_export.columns)
+                ws.append(headers)
+                
+                # 设置表头样式
+                for cell in ws[1]:
+                    cell.font = Font(bold=True)
+                    cell.alignment = Alignment(horizontal='center')
+                
+                # 2. 写入数据行（从第2行开始）
+                for idx, row in df_export.iterrows():
+                    row_data = []
+                    for col in headers:
+                        value = row[col]
+                        # 处理NaN和空值
+                        if pd.isna(value) or value == '':
+                            row_data.append('')
+                        else:
+                            row_data.append(value)
+                    ws.append(row_data)
+                
+                # 3. 添加折后总价公式（从第2行开始）
+                # 公式: 列表单价 * 服务数量 * (1 - 折扣/100)
+                # 找到各列的索引
+                col_indices = {col: idx+1 for idx, col in enumerate(headers)}  # Excel列从1开始
+                
+                list_price_col = col_indices['列表单价']  # K列
+                service_count_col = col_indices['服务数量']  # C列
+                discount_col = col_indices['折扣']  # L列
+                final_price_col = col_indices['折后总价']  # M列
+                
+                # 将数字转换为 Excel 列名 (1->A, 2->B, ...)
+                def col_num_to_letter(n):
+                    string = ""
+                    while n > 0:
+                        n, remainder = divmod(n - 1, 26)
+                        string = chr(65 + remainder) + string
+                    return string
+                
+                list_price_col_letter = col_num_to_letter(list_price_col)
+                service_count_col_letter = col_num_to_letter(service_count_col)
+                discount_col_letter = col_num_to_letter(discount_col)
+                final_price_col_letter = col_num_to_letter(final_price_col)
+                
+                # 为每行添加公式（从第2行开始，因为第1行是表头）
+                for row_idx in range(2, len(df_export) + 2):  # Excel行从1开始，数据从2开始
+                    # 公式: =IF(L2="", K2*C2, K2*C2*(1-L2/100))
+                    # 如果折扣为空，直接用单价*数量；否则计算折后价
+                    formula = f'=IF({discount_col_letter}{row_idx}="", {list_price_col_letter}{row_idx}*{service_count_col_letter}{row_idx}, {list_price_col_letter}{row_idx}*{service_count_col_letter}{row_idx}*(1-{discount_col_letter}{row_idx}/100))'
+                    ws[f'{final_price_col_letter}{row_idx}'] = formula
+                
+                # 4. 隐藏 success 和 error 列（设置列宽为0）
+                success_col_idx = col_indices.get('success')
+                error_col_idx = col_indices.get('error')
+                
+                if success_col_idx:
+                    ws.column_dimensions[col_num_to_letter(success_col_idx)].hidden = True
+                if error_col_idx:
+                    ws.column_dimensions[col_num_to_letter(error_col_idx)].hidden = True
+                
+                # 5. 调整列宽（自动调整）
+                for column in ws.columns:
+                    max_length = 0
+                    column_letter = column[0].column_letter
+                    
+                    # 跳过隐藏列
+                    if ws.column_dimensions[column_letter].hidden:
+                        continue
+                    
+                    for cell in column:
+                        try:
+                            if len(str(cell.value)) > max_length:
+                                max_length = len(str(cell.value))
+                        except:
+                            pass
+                    adjusted_width = min(max_length + 2, 50)  # 最大值50
+                    ws.column_dimensions[column_letter].width = adjusted_width
+                
+                # 保存Excel
+                wb.save(output_path)
                 
                 with open(output_path, "rb") as f:
                     excel_data = f.read()
